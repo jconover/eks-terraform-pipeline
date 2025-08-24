@@ -1,0 +1,75 @@
+name: Destroy EKS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      confirm:
+        description: 'Type "destroy" to confirm'
+        required: true
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-west-2'
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    # Only run if user typed "destroy"
+    if: github.event.inputs.confirm == 'destroy'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/${{ github.event.inputs.environment }}
+          terraform init
+
+      - name: Delete Kubernetes Resources First
+        continue-on-error: true
+        run: |
+          # Update kubeconfig
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} \
+            --name ${{ github.event.inputs.environment }}-eks-cluster || true
+          
+          # Delete any LoadBalancers (to remove AWS resources)
+          kubectl delete svc --all-namespaces --all --wait=false || true
+          
+          # Delete ingresses (removes ALBs)
+          kubectl delete ingress --all-namespaces --all --wait=false || true
+          
+          # Delete any PVCs (removes EBS volumes)
+          kubectl delete pvc --all-namespaces --all --wait=false || true
+
+      - name: Terraform Destroy
+        run: |
+          cd terraform/environments/${{ github.event.inputs.environment }}
+          terraform destroy -auto-approve
+
+      - name: Verify Destruction
+        run: |
+          echo "✅ Infrastructure destroyed successfully!"
+          echo "Destroyed environment: ${{ github.event.inputs.environment }}"
