@@ -6,48 +6,77 @@ on:
       - main
     paths:
       - 'terraform/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  TF_VERSION: '1.5.0'
+  AWS_REGION: 'us-west-2'
 
 jobs:
   terraform-apply:
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ github.event.inputs.environment || 'dev' }}
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
         run: |
-          cd terraform/environments/prod
+          cd terraform/environments/${{ github.event.inputs.environment || 'dev' }}
           terraform init
 
       - name: Terraform Apply
         run: |
-          cd terraform/environments/prod
+          cd terraform/environments/${{ github.event.inputs.environment || 'dev' }}
           terraform apply -auto-approve
 
       - name: Update kubeconfig
         run: |
-          aws eks update-kubeconfig --region us-west-2 --name production-eks-cluster
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ github.event.inputs.environment || 'dev' }}-eks-cluster
 
       - name: Deploy Monitoring Stack
         run: |
+          # Add Helm repos
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
           
-          kubectl create namespace monitoring || true
+          # Create monitoring namespace
+          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
           
+          # Install Prometheus
           helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
             --namespace monitoring \
-            --set grafana.adminPassword=${{ secrets.GRAFANA_PASSWORD }}
+            --values monitoring/prometheus/values.yaml \
+            --wait
+          
+          # Install Loki
+          helm upgrade --install loki grafana/loki-stack \
+            --namespace monitoring \
+            --set grafana.enabled=false \
+            --set promtail.enabled=true \
+            --wait

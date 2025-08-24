@@ -7,6 +7,12 @@ on:
     paths:
       - 'app/**'
       - 'k8s/**'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: 'us-west-2'
+  ECR_REPOSITORY: 'sample-app'
+  CLUSTER_NAME: 'dev-eks-cluster'
 
 jobs:
   build-and-deploy:
@@ -14,39 +20,54 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository if not exists
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
 
       - name: Build, tag, and push image to Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: sample-app
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Update kubeconfig
         run: |
-          aws eks update-kubeconfig --region us-west-2 --name production-eks-cluster
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
 
       - name: Deploy to EKS
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl set image deployment/sample-app \
-            sample-app=$ECR_REGISTRY/sample-app:$IMAGE_TAG \
-            -n default
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s/namespaces/
+          kubectl apply -f k8s/configmaps/
+          kubectl apply -f k8s/deployments/
+          kubectl apply -f k8s/services/
+          kubectl apply -f k8s/ingress/
           
-          kubectl rollout status deployment/sample-app -n default
+          # Update deployment with new image
+          kubectl set image deployment/sample-app \
+            sample-app=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -n production
+          
+          # Wait for rollout to complete
+          kubectl rollout status deployment/sample-app -n production --timeout=300s

@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alerts
+  namespace: monitoring
+data:
+  alerts.yaml: |
+    groups:
+    - name: kubernetes-apps
+      interval: 30s
+      rules:
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been restarting frequently"
+      
+      - alert: HighMemoryUsage
+        expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage in {{ $labels.namespace }}/{{ $labels.pod }}"
+          description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using > 90% of memory limit"
+      
+      - alert: HighCPUUsage
+        expr: (rate(container_cpu_usage_seconds_total[5m]) / container_spec_cpu_quota) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage in {{ $labels.namespace }}/{{ $labels.pod }}"
+          description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using > 90% of CPU limit"
+      
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ $labels.node }} is not ready"
+          description: "Node {{ $labels.node }} has been in NotReady state for more than 5 minutes"
