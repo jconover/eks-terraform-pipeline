@@ -1,0 +1,35 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+**/.terraform/*
+*.tfplan
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# Dependencies
+node_modules/
+vendor/
+
+# Credentials
+*.pem
+*.key
+kubeconfig
